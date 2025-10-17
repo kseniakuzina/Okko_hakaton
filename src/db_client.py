@@ -1,5 +1,3 @@
-# src/db_client.py
-
 import psycopg2
 from typing import List, Dict, Any
 
@@ -16,7 +14,7 @@ def get_db_connection():
 
 def search_movies(filters: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
-    Пример: filters = {"genre": "драма", "mood": "грустный", "limit": 5}
+    Поиск фильмов по жанрам, годам и другим параметрам
     """
     conn = None
     cursor = None
@@ -24,39 +22,180 @@ def search_movies(filters: Dict[str, Any]) -> List[Dict[str, Any]]:
         conn = get_db_connection()
         cursor = conn.cursor()
 
-        # Начало запроса
-        query = "SELECT title, genre, description, year, rating FROM movies WHERE 1=1"
+        # Сопоставление жанров пользователя с жанрами в БД
+        genre_mapping = {
+            "комедия": "Комедии",
+            "драма": "Драмы", 
+            "боевик": "Боевики",
+            "триллер": "Триллеры",
+            "фантастика": "Фантастика",
+            "ужасы": "Ужасы",
+            "мелодрама": "Мелодрамы",
+            "приключения": "Приключения",
+            "детектив": "Детективы",
+            "фэнтези": "Фэнтези",
+            "криминал": "Криминальное",
+            "семейный": "Семейное"
+        }
+
+        # Основной запрос
+        query = """
+        SELECT 
+            t.title_id,
+            t.serial_name as title,
+            t.content_type,
+            t.release_date,
+            EXTRACT(YEAR FROM t.release_date) as year,
+            t.age_rating,
+            t.description,
+            t.url,
+            STRING_AGG(DISTINCT g.name, ', ') as genres,
+            STRING_AGG(DISTINCT a.name, ', ') as actors,
+            STRING_AGG(DISTINCT d.name, ', ') as directors
+        FROM title t
+        LEFT JOIN title_genre tg ON t.title_id = tg.title_id
+        LEFT JOIN genre g ON tg.genre_id = g.genre_id
+        LEFT JOIN title_actor ta ON t.title_id = ta.title_id
+        LEFT JOIN actor a ON ta.actor_id = a.actor_id
+        LEFT JOIN title_director_item tdi ON t.title_id = tdi.title_id
+        LEFT JOIN director_item d ON tdi.director_item_id = d.director_item_id
+        WHERE t.content_type = 'Фильм'
+        """
         params = []
 
-        # Фильтр по жанру (частичное совпадение)
+        # Фильтр по жанру (используем маппинг)
         if filters.get("genre"):
-            query += " AND genre ILIKE %s"
-            params.append(f"%{filters['genre']}%")
+            user_genre = filters["genre"].lower()
+            db_genre = genre_mapping.get(user_genre, filters["genre"])
+            query += " AND g.name ILIKE %s"
+            params.append(f"%{db_genre}%")
 
-        # Фильтр по году (если указан)
-        if filters.get("max_year"):
-            query += " AND year <= %s"
-            params.append(filters["max_year"])
+        # Фильтр по году выпуска
         if filters.get("min_year"):
-            query += " AND year >= %s"
+            query += " AND EXTRACT(YEAR FROM t.release_date) >= %s"
             params.append(filters["min_year"])
+        if filters.get("max_year"):
+            query += " AND EXTRACT(YEAR FROM t.release_date) <= %s"
+            params.append(filters["max_year"])
+
+        # Группировка и сортировка
+        query += """
+        GROUP BY 
+            t.title_id, t.serial_name, t.content_type, t.release_date, 
+            t.age_rating, t.description, t.url
+        ORDER BY t.release_date DESC
+        """
 
         # Ограничение количества
-        limit = min(filters.get("limit", 5), 20)  # не больше 20
+        limit = min(filters.get("limit", 5), 20)
         query += f" LIMIT {limit}"
 
+        print(f"🔍 Выполняем запрос с жанром: {filters.get('genre')} -> {params}")
         cursor.execute(query, params)
         rows = cursor.fetchall()
 
         # Преобразуем в список словарей
-        columns = ["title", "genre", "description", "year", "rating"]
-        return [dict(zip(columns, row)) for row in rows]
+        columns = [
+            "title_id", "title", "content_type", "release_date", "year", 
+            "age_rating", "description", "url", "genres", "actors", "directors"
+        ]
+        
+        movies = []
+        for row in rows:
+            movie_dict = dict(zip(columns, row))
+            if movie_dict["year"]:
+                movie_dict["year"] = int(movie_dict["year"])
+            movies.append(movie_dict)
+
+        print(f"🎬 Найдено фильмов: {len(movies)}")
+        return movies
 
     except Exception as e:
-        print(f"Ошибка в search_movies: {e}")
+        print(f"❌ Ошибка в search_movies: {e}")
         return []
     finally:
         if cursor:
             cursor.close()
         if conn:
             conn.close()
+
+def search_by_keywords(filters: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Поиск по ключевым словам в названии и описании
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        query = """
+        SELECT 
+            t.title_id,
+            t.serial_name as title,
+            t.content_type,
+            t.release_date,
+            EXTRACT(YEAR FROM t.release_date) as year,
+            t.age_rating,
+            t.description,
+            t.url,
+            STRING_AGG(DISTINCT g.name, ', ') as genres
+        FROM title t
+        LEFT JOIN title_genre tg ON t.title_id = tg.title_id
+        LEFT JOIN genre g ON tg.genre_id = g.genre_id
+        WHERE t.content_type = 'Фильм'
+        AND (t.serial_name ILIKE %s OR t.description ILIKE %s)
+        GROUP BY t.title_id, t.serial_name, t.content_type, t.release_date, t.age_rating, t.description, t.url
+        ORDER BY t.release_date DESC
+        LIMIT %s
+        """
+        
+        keywords = filters.get("keywords", "")
+        limit = min(filters.get("limit", 5), 20)
+        
+        params = [f"%{keywords}%", f"%{keywords}%", limit]
+        
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        
+        columns = ["title_id", "title", "content_type", "release_date", "year", "age_rating", "description", "url", "genres"]
+        movies = []
+        for row in rows:
+            movie_dict = dict(zip(columns, row))
+            if movie_dict["year"]:
+                movie_dict["year"] = int(movie_dict["year"])
+            movies.append(movie_dict)
+            
+        print(f"🔍 Поиск по ключевым словам '{keywords}': найдено {len(movies)} фильмов")
+        return movies
+        
+    except Exception as e:
+        print(f"❌ Ошибка в search_by_keywords: {e}")
+        return []
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+# Тестирование
+if __name__ == "__main__":
+    # Тест с исправленным маппингом жанров
+    test_cases = [
+        {"genre": "комедия", "limit": 3},
+        {"genre": "драма", "limit": 3},
+        {"genre": "боевик", "limit": 3},
+        {"genre": "фантастика", "limit": 3},
+    ]
+    
+    for filters in test_cases:
+        print(f"\n🎯 Тестируем: {filters}")
+        movies = search_movies(filters)
+        for movie in movies:
+            print(f"   ✅ {movie['title']} ({movie.get('year', 'N/A')}) - {movie.get('genres', 'N/A')}")
+    
+    # Тест поиска по ключевым словам
+    print(f"\n🔍 Тестируем поиск по ключевым словам:")
+    keyword_results = search_by_keywords({"keywords": "любовь", "limit": 2})
+    for movie in keyword_results:
+        print(f"   ✅ {movie['title']} - {movie.get('genres', 'N/A')}")
