@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from ai_service import AIService
+from ai_service2 import AIService
 
 # Загружаем переменные
 load_dotenv()
@@ -27,7 +27,7 @@ class SmartFilmBot:
         welcome_text = f"""
 Привет, {user.first_name}! 🎬
 
-Я - твой умный помощник по подбору фильмов в Okko! 
+Я - Виви - твой умный помощник по подбору фильмов в Okko! 
 
 Я понимаю твои предпочтения и настроение, чтобы найти идеальные фильмы.
 
