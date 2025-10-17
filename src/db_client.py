@@ -1,5 +1,6 @@
 import psycopg2
 from typing import List, Dict, Any
+from datetime import datetime
 
 DB_CONFIG = {
     "host": "109.73.203.167",
@@ -177,7 +178,77 @@ def search_by_keywords(filters: Dict[str, Any]) -> List[Dict[str, Any]]:
             cursor.close()
         if conn:
             conn.close()
+def search_by_year(filters: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Специальный поиск фильмов по году
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
 
+        current_year = datetime.now().year
+        query = """
+        SELECT 
+            t.title_id,
+            t.serial_name as title,
+            t.content_type,
+            t.release_date,
+            EXTRACT(YEAR FROM t.release_date) as year,
+            t.age_rating,
+            t.description,
+            t.url,
+            STRING_AGG(DISTINCT g.name, ', ') as genres,
+            STRING_AGG(DISTINCT a.name, ', ') as actors
+        FROM title t
+        LEFT JOIN title_genre tg ON t.title_id = tg.title_id
+        LEFT JOIN genre g ON tg.genre_id = g.genre_id
+        LEFT JOIN title_actor ta ON t.title_id = ta.title_id
+        LEFT JOIN actor a ON ta.actor_id = a.actor_id
+        WHERE t.content_type = 'Фильм'
+        AND t.release_date IS NOT NULL
+        AND EXTRACT(YEAR FROM t.release_date) <= %s
+        AND EXTRACT(YEAR FROM t.release_date) = %s  -- Конкретный год
+        GROUP BY 
+            t.title_id, t.serial_name, t.content_type, t.release_date, 
+            t.age_rating, t.description, t.url
+        ORDER BY t.release_date DESC
+        LIMIT %s
+        """
+        
+        target_year = filters["year"]
+        limit = filters.get("limit", 8)  # Больше результатов для поиска по году
+        
+        params = [current_year, target_year, limit]
+
+        print(f"🔍 Поиск по году {target_year}, лимит: {limit}")
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+
+        columns = [
+            "title_id", "title", "content_type", "release_date", "year", 
+            "age_rating", "description", "url", "genres", "actors"
+        ]
+        
+        movies = []
+        for row in rows:
+            movie_dict = dict(zip(columns, row))
+            if movie_dict["year"]:
+                movie_dict["year"] = int(movie_dict["year"])
+            movies.append(movie_dict)
+
+        print(f"🎬 Найдено фильмов {target_year} года: {len(movies)}")
+        return movies
+
+    except Exception as e:
+        print(f"❌ Ошибка в search_by_year: {e}")
+        return []
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 # Тестирование
 if __name__ == "__main__":
     # Тест с исправленным маппингом жанров
